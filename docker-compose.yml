@@ -1,0 +1,86 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: bdpoms
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    # crea un usuario propio con acceso completo.
+    environment:
+      RABBITMQ_DEFAULT_USER: tiendaexpress
+      RABBITMQ_DEFAULT_PASS: tiendaexpress
+    ports:
+      - "5672:5672"
+      - "15672:15672" # panel de administración: http://localhost:15672
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    volumes:
+      - ./backend:/app
+      - /app/.venv # evita que el bind mount pise el venv instalado en la imagen
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: bdpoms
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      CELERY_BROKER_URL: amqp://tiendaexpress:tiendaexpress@rabbitmq:5672//
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  celery_worker:
+    build: ./backend
+    command: celery -A core worker --loglevel=info
+    volumes:
+      - ./backend:/app
+      - /app/.venv
+    env_file:
+      - ./backend/.env
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: bdpoms
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      CELERY_BROKER_URL: amqp://tiendaexpress:tiendaexpress@rabbitmq:5672//
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
